@@ -1,0 +1,35 @@
+{
+    "name": "berry/extension-method-stub-generator",
+    "description": "A composer plugin to generate berry extension method stubs",
+    "type": "composer-plugin",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Berry\\ExtensionMethodStubGenerator\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Christopher Kaster",
+            "email": "me@atomicptr.de"
+        }
+    ],
+    "require": {
+        "php": ">=8.3",
+        "composer-plugin-api": "^2.9"
+    },
+    "require-dev": {
+        "composer/composer": "^2.9",
+        "phpstan/phpstan": "^2.1",
+        "phpstan/extension-installer": "^1.4",
+        "phpstan/phpstan-deprecation-rules": "^2.0"
+    },
+    "extra": {
+        "class": "Berry\\ExtensionMethodStubGenerator\\ExtensionMethodStubGenerator"
+    },
+    "config": {
+        "allow-plugins": {
+            "phpstan/extension-installer": true
+        }
+    }
+}
