@@ -189,8 +189,6 @@ final class ExtensionMethodStubGenerator implements PluginInterface, EventSubscr
      */
     private function generateStubs(array $tree): void
     {
-        var_dump($tree);
-
         $rootPath = realpath(dirname(Factory::getComposerFile()));
         assert($rootPath !== false);
 
