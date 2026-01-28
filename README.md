@@ -16,7 +16,10 @@ Here is an example we use at [berry/htmx](https://github.com/berry-php/htmx):
     "extensions": [
         {
             "namespace": "Berry\\Html",
-            "class": "HtmlTag",
+            "class": [
+                "HtmlTag",
+                "HtmlVoidTag"
+            ],
             "uses": [
                 "Berry\\Htmx\\HxSwap",
                 "Berry\\Htmx\\HxTarget"
@@ -389,6 +392,20 @@ Here is an example we use at [berry/htmx](https://github.com/berry-php/htmx):
         }
     ]
 }
+```
+
+## Integrate with PHPStan
+
+This tool also creates an extension.neon file you can just include in your phpstan config like this:
+
+```yaml
+includes:
+    - .berry/extension.neon
+
+parameters:
+    level: 10
+    paths:
+        - src/
 ```
 
 ## License
