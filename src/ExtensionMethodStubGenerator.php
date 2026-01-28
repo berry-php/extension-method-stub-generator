@@ -11,6 +11,8 @@ use Composer\Composer;
 use Composer\Factory;
 use Exception;
 use LogicException;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
 
 /**
  * @phpstan-type Argument array{
@@ -40,7 +42,7 @@ final class ExtensionMethodStubGenerator implements PluginInterface, EventSubscr
     private ?Composer $composer = null;
     private ?IOInterface $io = null;
 
-    public static function getSubscribedEvents()
+    public static function getSubscribedEvents(): array
     {
         return [
             ScriptEvents::POST_INSTALL_CMD => 'handleEvent',
@@ -48,15 +50,15 @@ final class ExtensionMethodStubGenerator implements PluginInterface, EventSubscr
         ];
     }
 
-    public function activate(Composer $composer, IOInterface $io)
+    public function activate(Composer $composer, IOInterface $io): void
     {
         $this->composer = $composer;
         $this->io = $io;
     }
 
-    public function deactivate(Composer $composer, IOInterface $io) {}
+    public function deactivate(Composer $composer, IOInterface $io): void {}
 
-    public function uninstall(Composer $composer, IOInterface $io) {}
+    public function uninstall(Composer $composer, IOInterface $io): void {}
 
     public function handleEvent(Event $event): void
     {
@@ -115,10 +117,9 @@ final class ExtensionMethodStubGenerator implements PluginInterface, EventSubscr
 
                         foreach ($extension['methods'] as $method) {
                             // if already exists...
-                            if (array_find($curr[$class]['methods'], fn(
-                                /** @var Method $m */
-                                array $m
-                            ) => $m['name'] === $method['name']) !== null) {
+                            $exists = array_find($curr[$class]['methods'], fn(array $m) => $m['name'] === $method['name']) !== null;
+
+                            if ($exists) {
                                 throw new LogicException("Extension method named '{$method['name']}' has already been registered for class '{$extension['namespace']}\\{$class}'");
                             }
 
@@ -199,6 +200,7 @@ final class ExtensionMethodStubGenerator implements PluginInterface, EventSubscr
         }
 
         $this->generateStub($tree, $stubsRoot);
+        $this->writePhpstanExtensionFile($stubsRoot, $rootPath);
 
         $this->io?->write('<info>berry: Stub generation completed!</info>');
     }
@@ -254,7 +256,7 @@ final class ExtensionMethodStubGenerator implements PluginInterface, EventSubscr
         $usesString = '';
 
         $uses = $class['uses'] ?? [];
-        sort($uses);
+        sort($uses, SORT_STRING);
 
         if (count($uses) > 0) {
             $usesString .= "\n";
@@ -316,5 +318,62 @@ final class ExtensionMethodStubGenerator implements PluginInterface, EventSubscr
                 // stub
             }
             PHP);
+    }
+
+    private function writePhpstanExtensionFile(string $stubsRoot, string $rootPath): void
+    {
+        $files = [];
+
+        if (is_dir($stubsRoot)) {
+            $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($stubsRoot));
+
+            foreach ($it as $file) {
+                if (!$file instanceof \SplFileInfo) {
+                    continue;
+                }
+
+                if (!$file->isFile()) {
+                    continue;
+                }
+
+                // only include php files
+                if (strtolower($file->getExtension()) !== 'php') {
+                    continue;
+                }
+
+                $filePath = $file->getPathname();
+
+                $relative = substr($filePath, strlen($stubsRoot) + 1);
+                $relative = str_replace(DIRECTORY_SEPARATOR, '/', $relative);
+
+                $files[] = 'stubs/' . $relative;
+            }
+        }
+
+        sort($files, SORT_STRING);
+
+        $neonPath = $rootPath . '/.berry/extension.neon';
+
+        $content = "parameters:\n    stubFiles:";
+
+        if (count($files) === 0) {
+            $content .= " []\n";
+        } else {
+            $content .= "\n";
+
+            foreach ($files as $f) {
+                $content .= "        - {$f}\n";
+            }
+        }
+
+        $berryDir = dirname($neonPath);
+
+        if (!is_dir($berryDir)) {
+            mkdir($berryDir, recursive: true);
+        }
+
+        file_put_contents($neonPath, $content);
+
+        $this->io?->write("<info>berry: Wrote {$neonPath}</info>");
     }
 }
