@@ -1,0 +1,36 @@
+{
+    "extensions": [
+        {
+            "namespace": "Berry\\Html",
+            "class": ["HtmlTag", "HtmlVoidTag"],
+            "uses": ["Berry\\Htmx\\HxSwap", "Berry\\Htmx\\HxTarget"],
+            "methods": [
+                {
+                    "name": "hxGet",
+                    "doc": "Issues a GET request to the specified URL",
+                    "returns": "static",
+                    "args": [{"type": "string", "name": "url"}]
+                },
+                {
+                    "name": "hxTarget",
+                    "doc": "Target element for response",
+                    "returns": "static",
+                    "args": [
+                        {"type": "HxTarget|string", "name": "val"},
+                        {"type": "bool", "name": "inherited", "defaultValue": "false"},
+                        {"type": "bool", "name": "append", "defaultValue": "false"}
+                    ]
+                },
+                {
+                    "name": "hxOn",
+                    "doc": "Inline event handler; omit js for extended hx-on syntax",
+                    "returns": "static",
+                    "args": [
+                        {"type": "string", "name": "event"},
+                        {"type": "?string", "name": "js", "defaultValue": "null"}
+                    ]
+                }
+            ]
+        }
+    ]
+}

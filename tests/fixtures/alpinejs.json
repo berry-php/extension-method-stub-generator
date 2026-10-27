@@ -1,0 +1,31 @@
+{
+    "extensions": [
+        {
+            "namespace": "Berry\\Html",
+            "class": ["HtmlTag", "HtmlVoidTag"],
+            "methods": [
+                {
+                    "name": "xData",
+                    "doc": "Declares Alpine component state",
+                    "returns": "static",
+                    "args": [{"type": "array<mixed>|string|\\Stringable", "name": "data", "defaultValue": "'{}'"}]
+                },
+                {
+                    "name": "xTransition",
+                    "doc": "Adds transition helpers or custom transition stages",
+                    "returns": "static",
+                    "args": [
+                        {"type": "string|null", "name": "suffix", "defaultValue": "null"},
+                        {"type": "string|\\Stringable|null", "name": "expression", "defaultValue": "null"}
+                    ]
+                },
+                {
+                    "name": "xCloak",
+                    "doc": "Hides uninitialized Alpine content",
+                    "returns": "static",
+                    "args": []
+                }
+            ]
+        }
+    ]
+}

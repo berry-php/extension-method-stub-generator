@@ -19,16 +19,19 @@
         "composer-plugin-api": "^2.9"
     },
     "require-dev": {
-        "composer/composer": "^2.9",
-        "phpstan/phpstan": "^2.1",
-        "phpstan/extension-installer": "^1.4",
-        "phpstan/phpstan-deprecation-rules": "^2.0"
+        "composer/composer": "^2.10.3",
+        "phpstan/phpstan": "^2.3.2",
+        "phpstan/extension-installer": "^1.4.3",
+        "phpstan/phpstan-deprecation-rules": "^2.0.5",
+        "carthage-software/mago": "^1.59",
+        "pestphp/pest": "^4.7.8"
     },
     "extra": {
         "class": "Berry\\ExtensionMethodStubGenerator\\ExtensionMethodStubGenerator"
     },
     "config": {
         "allow-plugins": {
+            "pestphp/pest-plugin": true,
             "phpstan/extension-installer": true
         }
     }

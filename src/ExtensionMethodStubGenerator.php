@@ -1,7 +1,13 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace Berry\ExtensionMethodStubGenerator;
 
+use Berry\ExtensionMethodStubGenerator\Dto\ClassExtension;
+use Berry\ExtensionMethodStubGenerator\Dto\ClassStub;
+use Berry\ExtensionMethodStubGenerator\Mago\PatchGenerator;
+use Berry\ExtensionMethodStubGenerator\Mago\TargetResolver;
 use Composer\EventDispatcher\Event;
 use Composer\EventDispatcher\EventSubscriberInterface;
 use Composer\IO\IOInterface;
@@ -10,38 +16,18 @@ use Composer\Script\ScriptEvents;
 use Composer\Composer;
 use Composer\Factory;
 use Exception;
-use LogicException;
-use RecursiveDirectoryIterator;
-use RecursiveIteratorIterator;
+use Override;
+use RuntimeException;
 
-/**
- * @phpstan-type Argument array{
- *     name: string,
- *     type?: string|null,
- *     defaultValue?: string|null,
- * }
- * @phpstan-type Method array{
- *     name: string,
- *     doc?: string|null,
- *     returns?: string|null,
- *     args?: list<Argument>,
- * }
- * @phpstan-type ClassExtension array{
- *     namespace: string,
- *     class: string|list<string>,
- *     uses?: list<string>|null,
- *     methods: list<Method>,
- * }
- * @phpstan-type ExtensionStubFile array{extensions: ClassExtension[]}
- */
 final class ExtensionMethodStubGenerator implements PluginInterface, EventSubscriberInterface
 {
     private const string EXT_FILENAME = '/berry-method-extensions.json';
     private const string STUBS_DIR = '/.berry/stubs';
 
-    private ?Composer $composer = null;
-    private ?IOInterface $io = null;
+    private Composer $composer;
+    private IOInterface $io;
 
+    #[Override]
     public static function getSubscribedEvents(): array
     {
         return [
@@ -50,90 +36,87 @@ final class ExtensionMethodStubGenerator implements PluginInterface, EventSubscr
         ];
     }
 
+    #[Override]
     public function activate(Composer $composer, IOInterface $io): void
     {
         $this->composer = $composer;
         $this->io = $io;
     }
 
-    public function deactivate(Composer $composer, IOInterface $io): void {}
-
-    public function uninstall(Composer $composer, IOInterface $io): void {}
-
-    public function handleEvent(Event $event): void
+    #[Override]
+    public function deactivate(Composer $composer, IOInterface $io): void
     {
-        assert($this->composer !== null);
-        assert($this->io !== null);
+    }
 
+    #[Override]
+    public function uninstall(Composer $composer, IOInterface $io): void
+    {
+    }
+
+    public function handleEvent(Event $_event): void
+    {
         $this->io->write('<info>berry: Scanning all package roots...</info>');
 
-        /** @var array<string, array<string, mixed>> */
-        $namespaces = [];
+        $stubs = new StubCollection();
 
         foreach ($this->gatherBerryExtensionPackages() as $packageName => $packagePath) {
             try {
                 $file = $packagePath . self::EXT_FILENAME;
-                assert(is_file($file));
 
-                $this->io->write("<info>berry: Installing method extension stubs from '$packageName'...</info>");
+                $this->io->write("<info>berry: Installing method extension stubs from '{$packageName}'...</info>");
 
                 $content = file_get_contents($file);
-                assert($content !== false);
+                if ($content === false) {
+                    throw new RuntimeException("Could not read '{$file}'");
+                }
 
-                /** @var ExtensionStubFile */
-                $json = json_decode($content, true, flags: JSON_THROW_ON_ERROR);
-
-                foreach ($json['extensions'] as $extension) {
-                    $parts = explode('\\', $extension['namespace']);
-
-                    /** @var array<string, mixed> */
-                    $curr = &$namespaces;
-
-                    // go to the current namespace
-                    foreach ($parts as $part) {
-                        $curr[$part] ??= [];
-
-                        /** @var array<string, mixed> */
-                        $curr = &$curr[$part];
-                    }
-
-                    $classes = $extension['class'];
-
-                    if (is_string($classes)) {
-                        $classes = [$classes];
-                    }
-
-                    /** @var array<string, ClassExtension> $curr */
-                    $curr = $curr;
-
-                    foreach ($classes as $class) {
-                        $curr[$class] ??= [];
-                        $curr[$class]['namespace'] = $extension['namespace'];
-                        $curr[$class]['class'] = $class;
-                        $curr[$class]['uses'] ??= [];
-                        $curr[$class]['uses'] = array_unique(array_merge($curr[$class]['uses'], $extension['uses'] ?? []));
-
-                        $curr[$class]['methods'] ??= [];
-
-                        foreach ($extension['methods'] as $method) {
-                            // if already exists...
-                            $exists = array_find($curr[$class]['methods'], fn(array $m) => $m['name'] === $method['name']) !== null;
-
-                            if ($exists) {
-                                throw new LogicException("Extension method named '{$method['name']}' has already been registered for class '{$extension['namespace']}\\{$class}'");
-                            }
-
-                            $curr[$class]['methods'][] = $method;
-                        }
-                    }
+                foreach (ClassExtension::fromJson($content) as $extension) {
+                    $stubs->add($extension);
                 }
             } catch (Exception $ex) {
-                $this->io->error("berry: Error when trying to parse '$packagePath' from '$packageName': {$ex->getMessage()}");
+                $this->io->error(
+                    "berry: Error when trying to parse '{$packagePath}' from '{$packageName}': {$ex->getMessage()}",
+                );
                 continue;
             }
         }
 
-        $this->generateStubs($namespaces);
+        $this->generateStubs($stubs->all());
+        $this->generateMagoPatches($stubs);
+    }
+
+    private function generateMagoPatches(StubCollection $stubs): void
+    {
+        $this->io->write('<info>berry: Generating Mago patches...</info>');
+
+        try {
+            $root = $this->composer->getPackage();
+            $autoload = $this->composer->getAutoloadGenerator();
+
+            $packages = $autoload->buildPackageMap(
+                $this->composer->getInstallationManager(),
+                $root,
+                $this->composer->getRepositoryManager()->getLocalRepository()->getPackages(),
+            );
+
+            $loader = $autoload->createLoader($autoload->parseAutoloads($packages, $root));
+            $rootPath = realpath(dirname(Factory::getComposerFile()));
+
+            if ($rootPath === false) {
+                throw new RuntimeException('Could not resolve the project root');
+            }
+
+            $files = (new PatchGenerator(new TargetResolver($loader)))->generate(
+                $stubs->targets(),
+                $rootPath . '/.berry/mago',
+            );
+
+            foreach ($files as $file) {
+                $this->io->write("<info>berry: Wrote .berry/mago/{$file}</info>");
+            }
+        } catch (Exception $exception) {
+            $this->io->error('berry: Mago patch generation failed: ' . $exception->getMessage());
+        }
     }
 
     /**
@@ -141,9 +124,6 @@ final class ExtensionMethodStubGenerator implements PluginInterface, EventSubscr
      */
     private function gatherBerryExtensionPackages(): array
     {
-        assert($this->composer !== null);
-        assert($this->io !== null);
-
         $packages = [];
 
         $im = $this->composer->getInstallationManager();
@@ -186,253 +166,57 @@ final class ExtensionMethodStubGenerator implements PluginInterface, EventSubscr
     }
 
     /**
-     * @param array<string, array<string, mixed>> $tree
+     * @param array<string, ClassStub> $stubs
      */
-    private function generateStubs(array $tree): void
+    private function generateStubs(array $stubs): void
     {
         $rootPath = realpath(dirname(Factory::getComposerFile()));
-        assert($rootPath !== false);
+        if ($rootPath === false) {
+            throw new RuntimeException('Could not resolve the project root');
+        }
 
         $stubsRoot = $rootPath . self::STUBS_DIR;
-
-        if (!is_dir($stubsRoot)) {
-            mkdir($stubsRoot, recursive: true);
+        if (!is_dir($stubsRoot) && !mkdir($stubsRoot, recursive: true)) {
+            throw new RuntimeException("Could not create '{$stubsRoot}'");
         }
 
-        $this->generateStub($tree, $stubsRoot);
-        $this->generateImportStubs($tree, $stubsRoot);
-
-        $this->writePhpstanExtensionFile($stubsRoot, $rootPath);
-
-        $this->io?->write('<info>berry: Stub generation completed!</info>');
-    }
-
-    /**
-     * @param array<string, array<string, mixed>> $tree
-     */
-    private function generateStub(array $tree, string $currentPath): void
-    {
-        foreach ($tree as $namespacePart => $node) {
-            // if its a leaf (class)
-            if (isset($node['class']) && is_string($node['class'])) {
-                /** @var ClassExtension */
-                $node = $node;
-
-                $class = $node['class'];
-                assert(is_string($class));
-
-                $filePath = $currentPath . DIRECTORY_SEPARATOR . $class . '.php';
-
-                $content = $this->generateClass($node);
-
-                file_put_contents($filePath, $content);
-
-                $this->io?->write("<info>berry: Wrote $filePath</info>");
-
-                continue;
-            }
-
-            // its another namespace branch
-            $dir = $currentPath . DIRECTORY_SEPARATOR . $namespacePart;
-
-            if (!is_dir($dir)) {
-                mkdir($dir, recursive: true);
-            }
-
-            /** @var array<string, array<string, mixed>> */
-            $node = $node;
-
-            $this->generateStub($node, $dir);
-        }
-    }
-
-    /**
-     * @param array<string, array<string, mixed>> $tree
-     */
-    private function generateImportStubs(array $tree, string $stubsRoot): void
-    {
-        $uses = [];
-
-        $this->collectImports($tree, $uses);
-
-        $uses = array_unique($uses);
-
-        sort($uses, SORT_STRING);
-
-        foreach ($uses as $use) {
-            $use = ltrim((string) $use, '\ ');
-
-            if ($use === '') {
-                continue;
-            }
-
-            $parts = explode('\\', $use);
-            $short = array_pop($parts);
-
-            $dir = $stubsRoot;
-
-            if (count($parts) > 0) {
-                $dir .= DIRECTORY_SEPARATOR . implode(DIRECTORY_SEPARATOR, $parts);
-            }
-
-            if (!is_dir($dir)) {
-                mkdir($dir, recursive: true);
-            }
-
-            $filePath = $dir . DIRECTORY_SEPARATOR . $short . '.php';
-
-            $ns = count($parts) > 0 ? implode('\\', $parts) : '';
-
-            $nsDecl = $ns !== '' ? "namespace {$ns};\n" : '';
-
-            $content = trim(<<<PHP
-                <?php declare(strict_types=1);
-
-                // This file was automatically generated by berry/extension-method-stub-generator, please don't edit it
-                {$nsDecl}
-                class {$short}
-                {
-                    // stub
-                }
-                PHP);
-
-            file_put_contents($filePath, $content);
-
-            $this->io?->write("<info>berry: Wrote {$filePath}</info>");
-        }
-    }
-
-    /**
-     * @param array<string, array<string, mixed>> $tree
-     * @param list<string> $uses
-     */
-    private function collectImports(array $tree, array &$uses): void
-    {
-        /** @var array<string, mixed> $node */
-        foreach ($tree as $node) {
-            if (isset($node['class']) && is_string($node['class'])) {
-                /** @var ClassExtension $node */
-                $node = $node;
-
-                foreach ($node['uses'] ?? [] as $u) {
-                    $uses[] = (string) $u;
-                }
-
-                continue;
-            }
-
-            /** @var array<string, array<string, mixed>> */
-            $node = $node;
-
-            $this->collectImports($node, $uses);
-        }
-    }
-
-    /**
-     * @param ClassExtension $class
-     */
-    private function generateClass(array $class): string
-    {
-        $namespace = $class['namespace'];
-        $className = $class['class'];
-        assert(is_string($className));
-
-        $usesString = '';
-
-        $uses = $class['uses'] ?? [];
-        sort($uses, SORT_STRING);
-
-        if (count($uses) > 0) {
-            $usesString .= "\n";
-        }
-
-        foreach ($uses as $use) {
-            $usesString .= "use {$use};\n";
-        }
-
-        $docString = '';
-
-        $methods = $class['methods'];
-        usort($methods, fn(array $a, array $b) => strcmp($a['name'], $b['name']));
-
-        foreach ($methods as $method) {
-            $docString .= "\n * @method ";
-
-            if (isset($method['returns'])) {
-                $docString .= $method['returns'] . ' ';
-            }
-
-            $docString .= $method['name'];
-            $docString .= '(';
-
-            foreach ($method['args'] ?? [] as $index => $arg) {
-                if (isset($arg['type'])) {
-                    $docString .= $arg['type'] . ' ';
-                }
-
-                $docString .= "\${$arg['name']}";
-
-                if (isset($arg['defaultValue'])) {
-                    $docString .= ' = ' . $arg['defaultValue'];
-                }
-
-                if ($index !== array_key_last($method['args'])) {
-                    $docString .= ', ';
-                }
-            }
-
-            $docString .= ') ';
-
-            if (isset($method['doc'])) {
-                $docString .= $method['doc'];
-            }
-        }
-
-        return trim(<<<PHP
-            <?php declare(strict_types=1);
-
-            // This file was automatically generated by berry/extension-method-stub-generator, please don't edit it
-            namespace {$namespace};
-            {$usesString}
-            /**{$docString}
-             */
-            class {$className}
-            {
-                // stub
-            }
-            PHP);
-    }
-
-    private function writePhpstanExtensionFile(string $stubsRoot, string $rootPath): void
-    {
         $files = [];
+        $renderer = new StubRenderer();
 
-        if (is_dir($stubsRoot)) {
-            $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($stubsRoot));
-
-            foreach ($it as $file) {
-                if (!$file instanceof \SplFileInfo) {
-                    continue;
-                }
-
-                if (!$file->isFile()) {
-                    continue;
-                }
-
-                // only include php files
-                if (strtolower($file->getExtension()) !== 'php') {
-                    continue;
-                }
-
-                $filePath = $file->getPathname();
-
-                $relative = substr($filePath, strlen($stubsRoot) + 1);
-                $relative = str_replace(DIRECTORY_SEPARATOR, '/', $relative);
-
-                $files[] = 'stubs/' . $relative;
-            }
+        foreach ($stubs as $stub) {
+            $name = ltrim($stub->namespace . '\\' . $stub->className, '\\');
+            $files[] = $this->writeStub($stubsRoot, $name, $renderer->render($stub));
         }
 
+        $this->writePhpstanExtensionFile($files, $rootPath);
+        $this->io->write('<info>berry: Stub generation completed!</info>');
+    }
+
+    private function writeStub(string $stubsRoot, string $name, string $content): string
+    {
+        $relativePath = str_replace('\\', '/', $name) . '.php';
+        $filePath = $stubsRoot . '/' . $relativePath;
+        $dir = dirname($filePath);
+
+        if (!is_dir($dir) && !mkdir($dir, recursive: true)) {
+            throw new RuntimeException("Could not create '{$dir}'");
+        }
+
+        if (file_put_contents($filePath, $content) === false) {
+            throw new RuntimeException("Could not write '{$filePath}'");
+        }
+
+        $this->io->write("<info>berry: Wrote {$filePath}</info>");
+
+        return 'stubs/' . $relativePath;
+    }
+
+    /**
+     * @param list<string> $files
+     */
+    private function writePhpstanExtensionFile(array $files, string $rootPath): void
+    {
+        $files = array_unique($files);
         sort($files, SORT_STRING);
 
         $neonPath = $rootPath . '/.berry/extension.neon';
@@ -449,14 +233,10 @@ final class ExtensionMethodStubGenerator implements PluginInterface, EventSubscr
             }
         }
 
-        $berryDir = dirname($neonPath);
-
-        if (!is_dir($berryDir)) {
-            mkdir($berryDir, recursive: true);
+        if (file_put_contents($neonPath, $content) === false) {
+            throw new RuntimeException("Could not write '{$neonPath}'");
         }
 
-        file_put_contents($neonPath, $content);
-
-        $this->io?->write("<info>berry: Wrote {$neonPath}</info>");
+        $this->io->write("<info>berry: Wrote {$neonPath}</info>");
     }
 }
